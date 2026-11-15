@@ -1,0 +1,1151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>NASA 3D Planetary Surface Exploration</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    body, html {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background-color: #000;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      color: #e2e8f0;
+    }
+    #surface-canvas {
+      width: 100%;
+      height: 100%;
+      position: absolute;
+      top: 0;
+      left: 0;
+      z-index: 1;
+    }
+    /* Hide HTML HUD when inside Flutter iframe */
+    body.is-embedded .hud-layer,
+    body.is-embedded .controls-panel {
+      display: none !important;
+    }
+
+    .hud-layer {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 10;
+      pointer-events: none;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 16px;
+    }
+    .hud-card {
+      background: rgba(8, 15, 30, 0.8);
+      border: 1px solid rgba(0, 229, 255, 0.4);
+      box-shadow: 0 0 15px rgba(0, 229, 255, 0.15);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-family: monospace;
+      color: #38bdf8;
+      font-size: 11px;
+      letter-spacing: 0.5px;
+      pointer-events: auto;
+    }
+    .telemetry-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      margin-top: 3px;
+    }
+    #loading-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: radial-gradient(circle at center, #1e1b18 0%, #030712 100%);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      z-index: 100;
+      transition: opacity 0.5s ease;
+    }
+    .spinner {
+      width: 50px;
+      height: 50px;
+      border: 3px solid rgba(56, 189, 248, 0.2);
+      border-top-color: #38bdf8;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+  </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+</head>
+<body>
+  <div id="loading-overlay">
+    <div class="spinner"></div>
+    <div style="margin-top: 18px; color: #38bdf8; font-family: monospace; font-size: 13px; letter-spacing: 2px;">
+      INITIALIZING NASA SURFACE EXPLORATION &amp; 3D TERRAIN...
+    </div>
+  </div>
+
+  <div id="surface-canvas"></div>
+
+  <div class="hud-layer">
+    <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+      <div class="hud-card">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #10b981; box-shadow: 0 0 6px #10b981;"></span>
+          <span id="surface-title" style="font-weight: bold; color: #38bdf8;">EVA ASTRONAUT &amp; AEGIS-7 RECON</span>
+        </div>
+        <div class="telemetry-row">
+          <span>SURFACE POSITION:</span>
+          <span id="rover-pos" style="color: #fff;">X: 0.0m | Z: 0.0m</span>
+        </div>
+        <div class="telemetry-row">
+          <span>DISTANCE TO TARGET:</span>
+          <span id="target-dist" style="color: #10b981; font-weight: bold;">32.0m</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let scene, camera, renderer, controls;
+    let currentMode = 'mars'; // 'mars' or 'moon'
+    let currentSite = 'jezero';
+    let terrainMesh, astronautGroup, robotGroup, rockGroup, earthMesh, targetBeacon, beaconLight;
+    let leftLeg, rightLeg, leftArm, rightArm;
+    let keys = { forward: false, backward: false, left: false, right: false };
+    let joystickActive = false;
+    let joystickDx = 0, joystickDy = 0;
+    let isJumping = false;
+    let jumpVelocity = 0;
+    let walkSpeed = 0;
+    let astronautHeading = 0; // radians
+    let walkCycle = 0;
+    let lastPostTime = 0;
+    let targetSamplePosition = new THREE.Vector3(26.0, 0, -32.0);
+    let pulseRings = [];
+
+    // Distinct Configurations for 4 Mars & 4 Moon Missions
+    const SITE_CONFIGS = {
+      // Mars 4 Dedicated Sites
+      'jezero': {
+        name: 'Jezero Crater Delta',
+        beaconPos: new THREE.Vector3(26.0, 0, -32.0),
+        terrainHex: '#c2410c',
+        rockColor: 0x854d0e,
+        fogColor: 0xd97736,
+        fogDensity: 0.0075,
+        ambientColor: 0x9a3412,
+        roughness: 2.2,
+        feature: 'delta_sand'
+      },
+      'olympus': {
+        name: 'Olympus Mons Caldera',
+        beaconPos: new THREE.Vector3(-38.0, 0, 34.0),
+        terrainHex: '#7c2d12',
+        rockColor: 0x27272a,
+        fogColor: 0xb45309,
+        fogDensity: 0.0045,
+        ambientColor: 0x78350f,
+        roughness: 3.8,
+        feature: 'volcanic_caldera'
+      },
+      'valles_marineris': {
+        name: 'Valles Marineris Rift',
+        beaconPos: new THREE.Vector3(44.0, 0, 20.0),
+        terrainHex: '#991b1b',
+        rockColor: 0x7f1d1d,
+        fogColor: 0xc2410c,
+        fogDensity: 0.0085,
+        ambientColor: 0x991b1b,
+        roughness: 3.2,
+        feature: 'canyon_rift'
+      },
+      'gale': {
+        name: 'Gale Crater (Mount Sharp)',
+        beaconPos: new THREE.Vector3(-24.0, 0, -42.0),
+        terrainHex: '#b45309',
+        rockColor: 0x57534e,
+        fogColor: 0xca8a04,
+        fogDensity: 0.006,
+        ambientColor: 0x854d0e,
+        roughness: 2.6,
+        feature: 'sediment_mound'
+      },
+
+      // Moon 4 Dedicated Sites
+      'shackleton': {
+        name: 'Shackleton Crater Polar Rim',
+        beaconPos: new THREE.Vector3(20.0, 0, -36.0),
+        terrainHex: '#334155',
+        rockColor: 0x1e293b,
+        fogColor: 0x020617,
+        fogDensity: 0.0018,
+        ambientColor: 0x0f172a,
+        roughness: 2.5,
+        feature: 'ice_shadow'
+      },
+      'tranquillity': {
+        name: 'Mare Tranquillitatis (Apollo 11)',
+        beaconPos: new THREE.Vector3(-30.0, 0, -22.0),
+        terrainHex: '#475569',
+        rockColor: 0x334155,
+        fogColor: 0x030712,
+        fogDensity: 0.0012,
+        ambientColor: 0x1e293b,
+        roughness: 1.5,
+        feature: 'historic_base'
+      },
+      'copernicus': {
+        name: 'Copernicus Crater Terraces',
+        beaconPos: new THREE.Vector3(38.0, 0, 32.0),
+        terrainHex: '#94a3b8',
+        rockColor: 0x64748b,
+        fogColor: 0x090d16,
+        fogDensity: 0.002,
+        ambientColor: 0x334155,
+        roughness: 3.4,
+        feature: 'terraced_crater'
+      },
+      'south_pole_aitken': {
+        name: 'South Pole-Aitken (Malapert Mt)',
+        beaconPos: new THREE.Vector3(-42.0, 0, 24.0),
+        terrainHex: '#1e293b',
+        rockColor: 0x134e4a,
+        fogColor: 0x020617,
+        fogDensity: 0.0015,
+        ambientColor: 0x0f2937,
+        roughness: 3.0,
+        feature: 'mantle_basin'
+      }
+    };
+
+    window.addEventListener('DOMContentLoaded', () => {
+      if (window.parent && window.parent !== window) {
+        document.body.classList.add('is-embedded');
+      }
+
+      const urlParams = new URLSearchParams(window.location.search);
+      if (urlParams.get('planet') === 'moon') {
+        currentMode = 'moon';
+      }
+      const siteParam = urlParams.get('site');
+      if (siteParam && SITE_CONFIGS[siteParam]) {
+        currentSite = siteParam;
+      } else {
+        currentSite = (currentMode === 'moon') ? 'shackleton' : 'jezero';
+      }
+
+      const cfg = SITE_CONFIGS[currentSite];
+      if (cfg && cfg.beaconPos) {
+        targetSamplePosition.copy(cfg.beaconPos);
+      }
+
+      init();
+      animate();
+
+      const loader = document.getElementById('loading-overlay');
+      if (loader) {
+        setTimeout(() => {
+          loader.style.opacity = '0';
+          setTimeout(() => loader.remove(), 400);
+        }, 300);
+      }
+    });
+
+    function init() {
+      const container = document.getElementById('surface-canvas');
+      const width = container.clientWidth || window.innerWidth;
+      const height = container.clientHeight || window.innerHeight;
+      const cfg = SITE_CONFIGS[currentSite] || SITE_CONFIGS['jezero'];
+
+      scene = new THREE.Scene();
+
+      if (currentMode === 'mars') {
+        // Realistic Mars rust/orange sky atmosphere
+        scene.background = new THREE.Color(cfg.fogColor);
+        scene.fog = new THREE.FogExp2(cfg.fogColor, cfg.fogDensity);
+      } else {
+        // Deep vacuum of space for Moon
+        scene.background = new THREE.Color(0x010409);
+        scene.fog = new THREE.FogExp2(0x010409, cfg.fogDensity);
+      }
+
+      camera = new THREE.PerspectiveCamera(50, width / height, 0.5, 1000);
+      camera.position.set(0, 6.5, -12);
+
+      renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.setSize(width, height);
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1.1;
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      container.appendChild(renderer.domElement);
+
+      controls = new THREE.OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.08;
+      controls.maxPolarAngle = Math.PI / 2.05;
+      controls.minDistance = 3.5;
+      controls.maxDistance = 55;
+
+      // Sun Lighting
+      const sunColor = currentMode === 'mars' ? 0xfff1e6 : 0xffffff;
+      const sun = new THREE.DirectionalLight(sunColor, currentMode === 'mars' ? 2.4 : 3.4);
+      sun.position.set(50, 42, -30);
+      sun.castShadow = true;
+      sun.shadow.mapSize.width = 2048;
+      sun.shadow.mapSize.height = 2048;
+      sun.shadow.camera.near = 10;
+      sun.shadow.camera.far = 160;
+      sun.shadow.camera.left = -50;
+      sun.shadow.camera.right = 50;
+      sun.shadow.camera.top = 50;
+      sun.shadow.camera.bottom = -50;
+      scene.add(sun);
+
+      const ambient = new THREE.AmbientLight(cfg.ambientColor, currentMode === 'mars' ? 0.75 : 0.45);
+      scene.add(ambient);
+
+      // Environment Stars or Dust
+      if (currentMode === 'moon') {
+        buildStarfield();
+        buildDistantEarth();
+      } else {
+        buildMarsDistantMountains();
+      }
+
+      buildTerrain(cfg);
+      buildAstronaut();
+      buildAegisRobot();
+      buildRocks(cfg);
+      buildTargetBeacon(cfg);
+      buildSiteMonument(cfg);
+
+      window.addEventListener('keydown', onKeyDown);
+      window.addEventListener('keyup', onKeyUp);
+      window.addEventListener('resize', onWindowResize);
+      window.addEventListener('pointerdown', onScenePointerDown);
+      window.addEventListener('message', handlePostMessage);
+    }
+
+    function buildStarfield() {
+      const starGeo = new THREE.BufferGeometry();
+      const count = 1400;
+      const positions = new Float32Array(count * 3);
+      for (let i = 0; i < count * 3; i += 3) {
+        positions[i] = (Math.random() - 0.5) * 800;
+        positions[i + 1] = Math.random() * 350 + 20;
+        positions[i + 2] = (Math.random() - 0.5) * 800;
+      }
+      starGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      const starMat = new THREE.PointsMaterial({ color: 0xffffff, size: 1.8, transparent: true, opacity: 0.85 });
+      const stars = new THREE.Points(starGeo, starMat);
+      scene.add(stars);
+    }
+
+    function buildMarsDistantMountains() {
+      // Distant dramatic Martian crater rim
+      const mountainGeo = new THREE.CylinderGeometry(280, 300, 45, 32, 1, true);
+      const mountainMat = new THREE.MeshBasicMaterial({
+        color: 0x9a3412,
+        side: THREE.BackSide,
+        fog: true
+      });
+      const mountain = new THREE.Mesh(mountainGeo, mountainMat);
+      mountain.position.y = 10;
+      scene.add(mountain);
+    }
+
+    function buildTerrain(cfg) {
+      const terrainGeo = new THREE.PlaneGeometry(360, 360, 110, 110);
+      terrainGeo.rotateX(-Math.PI / 2);
+
+      const pos = terrainGeo.attributes.position;
+      const rough = cfg.roughness || 2.2;
+      for (let i = 0; i < pos.count; i++) {
+        const x = pos.getX(i);
+        const z = pos.getZ(i);
+        let y = Math.sin(x * 0.038) * Math.cos(z * 0.038) * rough +
+                Math.sin(x * 0.09) * 0.7 +
+                Math.cos(z * 0.12) * 0.4 +
+                (Math.random() - 0.5) * 0.12;
+
+        // Flatten landing clearing for astronaut
+        const distFromCenter = Math.hypot(x, z);
+        if (distFromCenter < 12) {
+          y *= (distFromCenter / 12);
+        }
+        pos.setY(i, y);
+      }
+      terrainGeo.computeVertexNormals();
+
+      const terrainCanvas = document.createElement('canvas');
+      terrainCanvas.width = 512;
+      terrainCanvas.height = 512;
+      const ctx = terrainCanvas.getContext('2d');
+
+      ctx.fillStyle = cfg.terrainHex || (currentMode === 'mars' ? '#c2410c' : '#64748b');
+      ctx.fillRect(0, 0, 512, 512);
+
+      // Detailed surface flecks / crater patterns
+      const fleckColor1 = currentMode === 'mars' ? '#9a3412' : '#334155';
+      const fleckColor2 = currentMode === 'mars' ? '#ea580c' : '#94a3b8';
+      for (let i = 0; i < 1100; i++) {
+        ctx.fillStyle = Math.random() > 0.5 ? fleckColor1 : fleckColor2;
+        ctx.fillRect(Math.random() * 512, Math.random() * 512, 3, 3);
+      }
+      // Crater rings on terrain texture
+      for (let i = 0; i < 16; i++) {
+        ctx.strokeStyle = fleckColor1;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(Math.random() * 512, Math.random() * 512, Math.random() * 24 + 6, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      const terrainTex = new THREE.CanvasTexture(terrainCanvas);
+      terrainTex.wrapS = THREE.RepeatWrapping;
+      terrainTex.wrapT = THREE.RepeatWrapping;
+      terrainTex.repeat.set(18, 18);
+
+      const terrainMat = new THREE.MeshStandardMaterial({
+        map: terrainTex,
+        roughness: 0.92,
+        metalness: 0.08
+      });
+
+      terrainMesh = new THREE.Mesh(terrainGeo, terrainMat);
+      terrainMesh.receiveShadow = true;
+      scene.add(terrainMesh);
+    }
+
+    // Upgraded Vibrant & Detailed NASA Astronaut Model
+    function buildAstronaut() {
+      astronautGroup = new THREE.Group();
+
+      const isMars = (currentMode === 'mars');
+      const accentColor = isMars ? 0xf97316 : 0x38bdf8;
+      const secondaryAccent = isMars ? 0xef4444 : 0x0284c7;
+
+      // High quality Materials
+      const suitWhiteMat = new THREE.MeshStandardMaterial({
+        color: 0xf8fafc,
+        roughness: 0.4,
+        metalness: 0.15
+      });
+      const suitDarkMat = new THREE.MeshStandardMaterial({
+        color: 0x0f172a,
+        roughness: 0.7,
+        metalness: 0.25
+      });
+      const goldVisorMat = new THREE.MeshStandardMaterial({
+        color: 0xfbbf24,
+        metalness: 0.98,
+        roughness: 0.03,
+        emissive: 0xf59e0b,
+        emissiveIntensity: 0.15
+      });
+      const accentMat = new THREE.MeshStandardMaterial({
+        color: accentColor,
+        emissive: accentColor,
+        emissiveIntensity: 0.25,
+        roughness: 0.35
+      });
+      const blueTrimMat = new THREE.MeshStandardMaterial({
+        color: secondaryAccent,
+        roughness: 0.4
+      });
+      const chromeMat = new THREE.MeshStandardMaterial({
+        color: 0xcfd8dc,
+        metalness: 0.92,
+        roughness: 0.08
+      });
+      const ledGreenMat = new THREE.MeshStandardMaterial({
+        color: 0x10b981,
+        emissive: 0x10b981,
+        emissiveIntensity: 1.2
+      });
+      const ledCyanMat = new THREE.MeshStandardMaterial({
+        color: 0x06b6d4,
+        emissive: 0x06b6d4,
+        emissiveIntensity: 1.2
+      });
+
+      // 1. Torso & Armor
+      const torsoGeo = new THREE.CylinderGeometry(0.44, 0.38, 1.15, 20);
+      const torso = new THREE.Mesh(torsoGeo, suitWhiteMat);
+      torso.position.y = 1.62;
+      torso.castShadow = true;
+      torso.receiveShadow = true;
+      astronautGroup.add(torso);
+
+      // Chest Telemetry & Control Unit
+      const chestPackGeo = new THREE.BoxGeometry(0.44, 0.34, 0.16);
+      const chestPack = new THREE.Mesh(chestPackGeo, suitDarkMat);
+      chestPack.position.set(0, 1.74, 0.38);
+      astronautGroup.add(chestPack);
+
+      // Glowing Status LEDs on chest
+      [-0.13, 0, 0.13].forEach((x, i) => {
+        const ledGeo = new THREE.BoxGeometry(0.06, 0.04, 0.03);
+        const led = new THREE.Mesh(ledGeo, i === 1 ? ledGreenMat : ledCyanMat);
+        led.position.set(x, 1.78, 0.47);
+        astronautGroup.add(led);
+      });
+
+      // NASA Blue Vector Emblem on upper chest
+      const patchGeo = new THREE.CylinderGeometry(0.09, 0.09, 0.03, 16);
+      patchGeo.rotateX(Math.PI / 2);
+      const patch = new THREE.Mesh(patchGeo, blueTrimMat);
+      patch.position.set(-0.22, 1.96, 0.34);
+      astronautGroup.add(patch);
+
+      // Waist Utility Belt with Heavy Buckle
+      const beltGeo = new THREE.TorusGeometry(0.43, 0.06, 12, 36);
+      beltGeo.rotateX(Math.PI / 2);
+      const belt = new THREE.Mesh(beltGeo, suitDarkMat);
+      belt.position.y = 1.08;
+      astronautGroup.add(belt);
+
+      const buckleGeo = new THREE.BoxGeometry(0.12, 0.09, 0.08);
+      const buckle = new THREE.Mesh(buckleGeo, accentMat);
+      buckle.position.set(0, 1.08, 0.44);
+      astronautGroup.add(buckle);
+
+      // 2. PLSS Life Support Backpack
+      const packGeo = new THREE.BoxGeometry(0.74, 1.0, 0.4);
+      const pack = new THREE.Mesh(packGeo, suitWhiteMat);
+      pack.position.set(0, 1.7, -0.44);
+      pack.castShadow = true;
+      astronautGroup.add(pack);
+
+      // Dual Oxygen Cylinders
+      [-0.22, 0.22].forEach(x => {
+        const tankGeo = new THREE.CylinderGeometry(0.1, 0.1, 0.76, 20);
+        const tank = new THREE.Mesh(tankGeo, chromeMat);
+        tank.position.set(x, 1.7, -0.66);
+        astronautGroup.add(tank);
+
+        const capGeo = new THREE.SphereGeometry(0.1, 14, 8);
+        const capTop = new THREE.Mesh(capGeo, suitDarkMat);
+        capTop.position.set(x, 2.08, -0.66);
+        astronautGroup.add(capTop);
+      });
+
+      // Backpack Thruster Cones with Gentle Blue Glow
+      [-0.22, 0.22].forEach(x => {
+        const thrusterGeo = new THREE.ConeGeometry(0.07, 0.14, 16);
+        const thruster = new THREE.Mesh(thrusterGeo, chromeMat);
+        thruster.position.set(x, 1.22, -0.64);
+        thruster.rotation.x = Math.PI;
+        astronautGroup.add(thruster);
+
+        const glowGeo = new THREE.SphereGeometry(0.045, 12, 12);
+        const glow = new THREE.Mesh(glowGeo, ledCyanMat);
+        glow.position.set(x, 1.14, -0.64);
+        astronautGroup.add(glow);
+      });
+
+      // 3. Helmet & Gold Mirror Visor
+      const neckRingGeo = new THREE.TorusGeometry(0.24, 0.05, 14, 28);
+      neckRingGeo.rotateX(Math.PI / 2);
+      const neckRing = new THREE.Mesh(neckRingGeo, chromeMat);
+      neckRing.position.set(0, 2.2, 0);
+      astronautGroup.add(neckRing);
+
+      const helmetGeo = new THREE.SphereGeometry(0.42, 32, 32);
+      const helmet = new THREE.Mesh(helmetGeo, suitWhiteMat);
+      helmet.position.set(0, 2.5, 0);
+      helmet.castShadow = true;
+      astronautGroup.add(helmet);
+
+      // Gold reflective panoramic visor
+      const visorGeo = new THREE.SphereGeometry(0.39, 28, 28, 0, Math.PI * 1.1, 0.25, Math.PI * 0.55);
+      const visor = new THREE.Mesh(visorGeo, goldVisorMat);
+      visor.position.set(0, 2.5, 0.06);
+      visor.rotation.x = Math.PI / 2;
+      astronautGroup.add(visor);
+
+      // Helmet Flashlight & Antenna
+      const lightGeo = new THREE.BoxGeometry(0.08, 0.06, 0.12);
+      const light = new THREE.Mesh(lightGeo, suitDarkMat);
+      light.position.set(0.24, 2.76, 0.18);
+      astronautGroup.add(light);
+
+      const bulbGeo = new THREE.SphereGeometry(0.03, 10, 10);
+      const bulb = new THREE.Mesh(bulbGeo, ledGreenMat);
+      bulb.position.set(0.24, 2.76, 0.24);
+      astronautGroup.add(bulb);
+
+      // 4. Shoulder Pauldrons with Color Trim
+      [-0.54, 0.54].forEach((x, idx) => {
+        const shoulderGeo = new THREE.SphereGeometry(0.23, 18, 14, 0, Math.PI * 2, 0, Math.PI * 0.6);
+        const shoulder = new THREE.Mesh(shoulderGeo, suitWhiteMat);
+        shoulder.position.set(x, 2.14, 0);
+        shoulder.rotation.z = idx === 0 ? Math.PI / 2 : -Math.PI / 2;
+        shoulder.castShadow = true;
+        astronautGroup.add(shoulder);
+
+        const stripeGeo = new THREE.BoxGeometry(0.08, 0.45, 0.06);
+        const stripe = new THREE.Mesh(stripeGeo, accentMat);
+        stripe.position.set(x > 0 ? 0.48 : -0.48, 1.88, 0.18);
+        astronautGroup.add(stripe);
+      });
+
+      // 5. Articulated Legs
+      const upperLegGeo = new THREE.CylinderGeometry(0.19, 0.17, 0.54, 18);
+      const lowerLegGeo = new THREE.CylinderGeometry(0.17, 0.14, 0.46, 18);
+      const kneePadGeo = new THREE.BoxGeometry(0.26, 0.14, 0.2);
+      const bootGeo = new THREE.BoxGeometry(0.26, 0.2, 0.45);
+
+      leftLeg = new THREE.Group();
+      leftLeg.position.set(-0.25, 1.08, 0);
+      const lUpper = new THREE.Mesh(upperLegGeo, suitWhiteMat);
+      lUpper.position.y = -0.27; lUpper.castShadow = true;
+      leftLeg.add(lUpper);
+      const lKnee = new THREE.Mesh(kneePadGeo, suitDarkMat);
+      lKnee.position.set(0, -0.52, 0.1);
+      leftLeg.add(lKnee);
+      const lLower = new THREE.Mesh(lowerLegGeo, suitWhiteMat);
+      lLower.position.y = -0.76; lLower.castShadow = true;
+      leftLeg.add(lLower);
+      const lBoot = new THREE.Mesh(bootGeo, suitDarkMat);
+      lBoot.position.set(0, -1.02, 0.09);
+      leftLeg.add(lBoot);
+      astronautGroup.add(leftLeg);
+
+      rightLeg = new THREE.Group();
+      rightLeg.position.set(0.25, 1.08, 0);
+      const rUpper = new THREE.Mesh(upperLegGeo, suitWhiteMat);
+      rUpper.position.y = -0.27; rUpper.castShadow = true;
+      rightLeg.add(rUpper);
+      const rKnee = new THREE.Mesh(kneePadGeo, suitDarkMat);
+      rKnee.position.set(0, -0.52, 0.1);
+      rightLeg.add(rKnee);
+      const rLower = new THREE.Mesh(lowerLegGeo, suitWhiteMat);
+      rLower.position.y = -0.76; rLower.castShadow = true;
+      rightLeg.add(rLower);
+      const rBoot = new THREE.Mesh(bootGeo, suitDarkMat);
+      rBoot.position.set(0, -1.02, 0.09);
+      rightLeg.add(rBoot);
+      astronautGroup.add(rightLeg);
+
+      // 6. Articulated Arms
+      const upperArmGeo = new THREE.CylinderGeometry(0.14, 0.13, 0.46, 16);
+      const elbowGeo = new THREE.SphereGeometry(0.14, 16, 12);
+      const lowerArmGeo = new THREE.CylinderGeometry(0.12, 0.11, 0.42, 16);
+      const gloveGeo = new THREE.SphereGeometry(0.14, 18, 14);
+
+      leftArm = new THREE.Group();
+      leftArm.position.set(-0.58, 2.1, 0);
+      const lUArm = new THREE.Mesh(upperArmGeo, suitWhiteMat);
+      lUArm.position.y = -0.23; lUArm.castShadow = true;
+      leftArm.add(lUArm);
+      const lElb = new THREE.Mesh(elbowGeo, chromeMat);
+      lElb.position.y = -0.48;
+      leftArm.add(lElb);
+      const lLArm = new THREE.Mesh(lowerArmGeo, suitWhiteMat);
+      lLArm.position.y = -0.7; lLArm.castShadow = true;
+      leftArm.add(lLArm);
+      const lGlove = new THREE.Mesh(gloveGeo, suitDarkMat);
+      lGlove.position.y = -0.95;
+      leftArm.add(lGlove);
+      astronautGroup.add(leftArm);
+
+      rightArm = new THREE.Group();
+      rightArm.position.set(0.58, 2.1, 0);
+      const rUArm = new THREE.Mesh(upperArmGeo, suitWhiteMat);
+      rUArm.position.y = -0.23; rUArm.castShadow = true;
+      rightArm.add(rUArm);
+      const rElb = new THREE.Mesh(elbowGeo, chromeMat);
+      rElb.position.y = -0.48;
+      rightArm.add(rElb);
+      const rLArm = new THREE.Mesh(lowerArmGeo, suitWhiteMat);
+      rLArm.position.y = -0.7; rLArm.castShadow = true;
+      rightArm.add(rLArm);
+      const rGlove = new THREE.Mesh(gloveGeo, suitDarkMat);
+      rGlove.position.y = -0.95;
+      rightArm.add(rGlove);
+      astronautGroup.add(rightArm);
+
+      astronautGroup.traverse(obj => {
+        if (obj.isMesh) {
+          obj.castShadow = true;
+          obj.receiveShadow = true;
+        }
+      });
+
+      scene.add(astronautGroup);
+    }
+
+    // 3D Floating AI Companion Robot "AEGIS-7"
+    function buildAegisRobot() {
+      robotGroup = new THREE.Group();
+
+      const chassisMat = new THREE.MeshStandardMaterial({
+        color: 0x0284c7,
+        metalness: 0.85,
+        roughness: 0.2
+      });
+      const eyeMat = new THREE.MeshStandardMaterial({
+        color: 0x00f0ff,
+        emissive: 0x00f0ff,
+        emissiveIntensity: 1.1
+      });
+      const ringMat = new THREE.MeshStandardMaterial({
+        color: 0x38bdf8,
+        emissive: 0x0ea5e9,
+        emissiveIntensity: 0.6
+      });
+      const darkMat = new THREE.MeshStandardMaterial({ color: 0x0f172a });
+
+      const coreGeo = new THREE.SphereGeometry(0.38, 24, 24);
+      const core = new THREE.Mesh(coreGeo, chassisMat);
+      core.castShadow = true;
+      robotGroup.add(core);
+
+      const eyeGeo = new THREE.CylinderGeometry(0.08, 0.08, 0.55, 16);
+      eyeGeo.rotateZ(Math.PI / 2);
+      const eye = new THREE.Mesh(eyeGeo, eyeMat);
+      eye.position.set(0, 0.05, 0.32);
+      robotGroup.add(eye);
+
+      const ringGeo = new THREE.TorusGeometry(0.28, 0.05, 16, 32);
+      ringGeo.rotateX(Math.PI / 2);
+      const ring = new THREE.Mesh(ringGeo, ringMat);
+      ring.position.y = -0.32;
+      robotGroup.add(ring);
+
+      const antGeo = new THREE.CylinderGeometry(0.02, 0.02, 0.3, 8);
+      const ant = new THREE.Mesh(antGeo, darkMat);
+      ant.position.set(0, 0.45, 0);
+      robotGroup.add(ant);
+
+      const beaconGeo = new THREE.SphereGeometry(0.06, 12, 12);
+      const beacon = new THREE.Mesh(beaconGeo, new THREE.MeshStandardMaterial({
+        color: 0x10b981,
+        emissive: 0x10b981,
+        emissiveIntensity: 1.2
+      }));
+      beacon.position.set(0, 0.62, 0);
+      robotGroup.add(beacon);
+
+      scene.add(robotGroup);
+    }
+
+    // High-Intensity Luminescent Target Beacon with Light Column & Sonar Rings
+    function buildTargetBeacon(cfg) {
+      targetBeacon = new THREE.Group();
+      pulseRings = [];
+
+      const beaconColor = (currentMode === 'mars') ? 0xf59e0b : 0x00f0ff;
+      const glowColor = (currentMode === 'mars') ? 0xd97706 : 0x0284c7;
+
+      // 1. Soaring Vertical Light Beam (Visible from anywhere)
+      const beamGeo = new THREE.CylinderGeometry(0.3, 0.3, 36, 16);
+      const beamMat = new THREE.MeshBasicMaterial({
+        color: beaconColor,
+        transparent: true,
+        opacity: 0.45,
+        side: THREE.DoubleSide
+      });
+      const beam = new THREE.Mesh(beamGeo, beamMat);
+      beam.position.y = 18.0;
+      targetBeacon.add(beam);
+
+      // Inner intense core beam
+      const coreBeamGeo = new THREE.CylinderGeometry(0.08, 0.08, 36, 12);
+      const coreBeamMat = new THREE.MeshBasicMaterial({
+        color: 0xffffff,
+        transparent: true,
+        opacity: 0.85
+      });
+      const coreBeam = new THREE.Mesh(coreBeamGeo, coreBeamMat);
+      coreBeam.position.y = 18.0;
+      targetBeacon.add(coreBeam);
+
+      // 2. Floating Rotating Sci-Fi Crystal
+      const crystalGeo = new THREE.OctahedronGeometry(1.0, 0);
+      const crystalMat = new THREE.MeshStandardMaterial({
+        color: beaconColor,
+        emissive: glowColor,
+        emissiveIntensity: 0.9,
+        roughness: 0.1,
+        metalness: 0.9
+      });
+      const crystal = new THREE.Mesh(crystalGeo, crystalMat);
+      crystal.position.y = 2.0;
+      targetBeacon.add(crystal);
+
+      // 3. Ground Pulsing Concentric Radar Rings
+      for (let i = 0; i < 3; i++) {
+        const ringGeo = new THREE.RingGeometry(0.6, 0.85, 32);
+        ringGeo.rotateX(-Math.PI / 2);
+        const ringMat = new THREE.MeshBasicMaterial({
+          color: beaconColor,
+          transparent: true,
+          opacity: 0.7,
+          side: THREE.DoubleSide
+        });
+        const ring = new THREE.Mesh(ringGeo, ringMat);
+        ring.position.y = 0.12 + i * 0.02;
+        ring.userData = { phase: i * (Math.PI * 2 / 3) };
+        pulseRings.push(ring);
+        targetBeacon.add(ring);
+      }
+
+      // 4. Dynamic Point Light on Beacon
+      beaconLight = new THREE.PointLight(beaconColor, 3.5, 30);
+      beaconLight.position.y = 2.5;
+      targetBeacon.add(beaconLight);
+
+      targetBeacon.position.copy(targetSamplePosition);
+      scene.add(targetBeacon);
+    }
+
+    // Unique Site Specific Scenery Monument
+    function buildSiteMonument(cfg) {
+      if (currentSite === 'tranquillity') {
+        // Apollo 11 Lunar Descent Stage monument
+        const apolloGroup = new THREE.Group();
+        const goldFoilMat = new THREE.MeshStandardMaterial({ color: 0xd97706, metalness: 0.95, roughness: 0.1 });
+        const base = new THREE.Mesh(new THREE.BoxGeometry(4.2, 1.6, 4.2), goldFoilMat);
+        base.position.y = 0.8;
+        apolloGroup.add(base);
+        // Descent engine bell
+        const engine = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.9, 1.2, 16), new THREE.MeshStandardMaterial({ color: 0x1e293b }));
+        engine.position.y = 0.6;
+        apolloGroup.add(engine);
+        apolloGroup.position.set(-35, 0, -25);
+        scene.add(apolloGroup);
+      } else if (currentSite === 'olympus') {
+        // Large volcanic ridge rock
+        const volcanicGeo = new THREE.ConeGeometry(8, 16, 6);
+        const volcanicMat = new THREE.MeshStandardMaterial({ color: 0x18181b, roughness: 0.95 });
+        const calderaSpire = new THREE.Mesh(volcanicGeo, volcanicMat);
+        calderaSpire.position.set(-65, 8, 50);
+        scene.add(calderaSpire);
+      }
+    }
+
+    function buildRocks(cfg) {
+      rockGroup = new THREE.Group();
+      const rockGeo = new THREE.DodecahedronGeometry(1, 1);
+      const rockMat = new THREE.MeshStandardMaterial({
+        color: cfg.rockColor || (currentMode === 'mars' ? 0x854d0e : 0x475569),
+        roughness: 0.95
+      });
+
+      for (let i = 0; i < 95; i++) {
+        const rock = new THREE.Mesh(rockGeo, rockMat);
+        const x = (Math.random() - 0.5) * 220;
+        const z = (Math.random() - 0.5) * 220;
+        if (Math.abs(x) < 8 && Math.abs(z) < 8) continue;
+        const s = Math.random() * 2.2 + 0.5;
+        rock.scale.set(s, s * 0.75, s);
+        rock.position.set(x, s * 0.35, z);
+        rock.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, 0);
+        rock.castShadow = true;
+        rock.receiveShadow = true;
+        rockGroup.add(rock);
+      }
+      scene.add(rockGroup);
+    }
+
+    function buildDistantEarth() {
+      const earthGeo = new THREE.SphereGeometry(18, 32, 32);
+      const canvas = document.createElement('canvas');
+      canvas.width = 512; canvas.height = 256;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#0284c7';
+      ctx.fillRect(0, 0, 512, 256);
+      ctx.fillStyle = '#16a34a';
+      ctx.beginPath();
+      ctx.arc(180, 100, 60, 0, Math.PI * 2);
+      ctx.arc(320, 140, 70, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+      for (let i = 0; i < 20; i++) {
+        ctx.fillRect(Math.random() * 512, Math.random() * 256, 90, 15);
+      }
+      const earthMat = new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(canvas) });
+      earthMesh = new THREE.Mesh(earthGeo, earthMat);
+      earthMesh.position.set(-220, 160, -350);
+      scene.add(earthMesh);
+    }
+
+    // Keyboard handlers
+    function onKeyDown(e) {
+      if (e.key === 'w' || e.key === 'ArrowUp') keys.forward = true;
+      if (e.key === 's' || e.key === 'ArrowDown') keys.backward = true;
+      if (e.key === 'a' || e.key === 'ArrowLeft') keys.left = true;
+      if (e.key === 'd' || e.key === 'ArrowRight') keys.right = true;
+      if (e.code === 'Space') {
+        triggerJump();
+      }
+    }
+
+    function onKeyUp(e) {
+      if (e.key === 'w' || e.key === 'ArrowUp') keys.forward = false;
+      if (e.key === 's' || e.key === 'ArrowDown') keys.backward = false;
+      if (e.key === 'a' || e.key === 'ArrowLeft') keys.left = false;
+      if (e.key === 'd' || e.key === 'ArrowRight') keys.right = false;
+    }
+
+    function setDrive(dir, isDown) {
+      keys[dir] = isDown;
+    }
+
+    function triggerJump() {
+      if (isJumping) return;
+      isJumping = true;
+      // Responsive, powerful low gravity jump
+      jumpVelocity = (currentMode === 'moon') ? 0.44 : 0.36;
+    }
+
+    function onScenePointerDown(event) {
+      if (!camera || !targetBeacon) return;
+      const rect = renderer.domElement.getBoundingClientRect();
+      const mouse = new THREE.Vector2(
+        ((event.clientX - rect.left) / rect.width) * 2 - 1,
+        -((event.clientY - rect.top) / rect.height) * 2 + 1
+      );
+      const raycaster = new THREE.Raycaster();
+      raycaster.setFromCamera(mouse, camera);
+      const intersects = raycaster.intersectObjects(targetBeacon.children, true);
+      if (intersects.length > 0) {
+        if (astronautGroup && astronautGroup.position.distanceTo(targetSamplePosition) < 18.0) {
+          if (window.parent && window.parent !== window) {
+            window.parent.postMessage(JSON.stringify({ type: 'TARGET_CLICKED' }), '*');
+          }
+        }
+      }
+    }
+
+    function animate() {
+      requestAnimationFrame(animate);
+
+      const time = performance.now() * 0.001;
+
+      // Astronaut Kinematics & Walking
+      if (astronautGroup) {
+        let targetSpeed = 0;
+
+        if (joystickActive) {
+          // Smooth, boosted 360-degree analog joystick movement
+          const mag = Math.min(1.0, Math.hypot(joystickDx, joystickDy));
+          if (mag > 0.08) {
+            const targetHeading = Math.atan2(joystickDx, -joystickDy);
+            let diff = (targetHeading - astronautHeading) % (Math.PI * 2);
+            if (diff < -Math.PI) diff += Math.PI * 2;
+            if (diff > Math.PI) diff -= Math.PI * 2;
+            astronautHeading += diff * 0.28;
+
+            targetSpeed = mag * (currentMode === 'moon' ? 0.38 : 0.34);
+          }
+        } else {
+          // Responsive Keyboard Controls
+          if (keys.left) astronautHeading += 0.055;
+          if (keys.right) astronautHeading -= 0.055;
+
+          if (keys.forward) targetSpeed = (currentMode === 'moon' ? 0.38 : 0.34);
+          if (keys.backward) targetSpeed = -0.22;
+        }
+
+        walkSpeed += (targetSpeed - walkSpeed) * 0.26;
+
+        astronautGroup.rotation.y = astronautHeading;
+        astronautGroup.position.x += Math.sin(astronautHeading) * walkSpeed;
+        astronautGroup.position.z += Math.cos(astronautHeading) * walkSpeed;
+
+        // Jump physics & low-gravity simulation
+        if (isJumping) {
+          astronautGroup.position.y += jumpVelocity;
+          const grav = (currentMode === 'moon') ? 0.010 : 0.015;
+          jumpVelocity -= grav;
+
+          // Leg jump tuck pose
+          leftLeg.rotation.x = -0.4;
+          rightLeg.rotation.x = -0.4;
+          leftArm.rotation.x = 0.45;
+          rightArm.rotation.x = 0.45;
+
+          if (astronautGroup.position.y <= 0) {
+            astronautGroup.position.y = 0;
+            isJumping = false;
+            jumpVelocity = 0;
+          }
+        } else {
+          // Limb swinging walk cycle animation
+          if (Math.abs(walkSpeed) > 0.01) {
+            walkCycle += Math.abs(walkSpeed) * 1.8;
+            leftLeg.rotation.x = Math.sin(walkCycle) * 0.55;
+            rightLeg.rotation.x = -Math.sin(walkCycle) * 0.55;
+            leftArm.rotation.x = -Math.sin(walkCycle) * 0.45;
+            rightArm.rotation.x = Math.sin(walkCycle) * 0.45;
+            astronautGroup.position.y = Math.abs(Math.sin(walkCycle * 2)) * 0.06;
+          } else {
+            leftLeg.rotation.x *= 0.85;
+            rightLeg.rotation.x *= 0.85;
+            leftArm.rotation.x *= 0.85;
+            rightArm.rotation.x *= 0.85;
+            astronautGroup.position.y = 0;
+          }
+        }
+
+        // Floating Robot "AEGIS-7" follows astronaut smoothly
+        if (robotGroup) {
+          const sideOffset = new THREE.Vector3(
+            Math.cos(astronautHeading) * 1.6 - Math.sin(astronautHeading) * 0.4,
+            1.3 + Math.sin(time * 3.5) * 0.14,
+            -Math.sin(astronautHeading) * 1.6 - Math.cos(astronautHeading) * 0.4
+          );
+          const targetRobotPos = astronautGroup.position.clone().add(sideOffset);
+          robotGroup.position.lerp(targetRobotPos, 0.15);
+          robotGroup.rotation.y = astronautHeading;
+        }
+
+        // Smooth Camera Follow
+        const camOffset = new THREE.Vector3(
+          Math.sin(astronautHeading) * -11.5,
+          5.6,
+          Math.cos(astronautHeading) * -11.5
+        );
+        camera.position.lerp(astronautGroup.position.clone().add(camOffset), 0.12);
+        controls.target.lerp(astronautGroup.position.clone().add(new THREE.Vector3(0, 1.6, 0)), 0.15);
+
+        // Distance to active sample target
+        const distanceToTarget = astronautGroup.position.distanceTo(targetSamplePosition);
+
+        // Post telemetry back to Flutter
+        const now = performance.now();
+        if (now - lastPostTime > 250) {
+          lastPostTime = now;
+          const posX = astronautGroup.position.x.toFixed(1);
+          const posZ = astronautGroup.position.z.toFixed(1);
+          const deg = Math.round((astronautHeading * 180 / Math.PI) % 360);
+          const normDeg = (deg < 0 ? deg + 360 : deg);
+
+          const hudDist = document.getElementById('target-dist');
+          if (hudDist) hudDist.innerText = `${distanceToTarget.toFixed(1)}m`;
+
+          if (window.parent && window.parent !== window) {
+            window.parent.postMessage(JSON.stringify({
+              type: 'ASTRONAUT_TELEMETRY',
+              x: posX,
+              z: posZ,
+              targetX: targetSamplePosition.x.toFixed(1),
+              targetZ: targetSamplePosition.z.toFixed(1),
+              distanceToTarget: distanceToTarget.toFixed(1),
+              speed: (Math.abs(walkSpeed * 36)).toFixed(1),
+              heading: normDeg
+            }), '*');
+          }
+        }
+      }
+
+      // Rotate target beacon crystal & pulse sonar ground rings
+      if (targetBeacon) {
+        const crystal = targetBeacon.children[2];
+        if (crystal) {
+          crystal.rotation.y += 0.025;
+          crystal.rotation.x = Math.sin(time * 2) * 0.2;
+          crystal.position.y = 2.0 + Math.sin(time * 3) * 0.25;
+        }
+
+        // Pulse concentric rings
+        pulseRings.forEach(ring => {
+          const t = (time * 1.5 + ring.userData.phase) % (Math.PI * 2);
+          const scale = 1.0 + (t / (Math.PI * 2)) * 3.6;
+          const opacity = Math.max(0, 1.0 - (t / (Math.PI * 2)));
+          ring.scale.set(scale, scale, 1);
+          ring.material.opacity = opacity * 0.8;
+        });
+
+        if (beaconLight) {
+          beaconLight.intensity = 2.8 + Math.sin(time * 4) * 1.2;
+        }
+      }
+
+      controls.update();
+      renderer.render(scene, camera);
+
+      if (!window.__sceneReadyNotified) {
+        window.__sceneReadyNotified = true;
+        if (window.parent && window.parent !== window) {
+          window.parent.postMessage(JSON.stringify({ type: 'SCENE_READY' }), '*');
+        }
+      }
+    }
+
+    function onWindowResize() {
+      const container = document.getElementById('surface-canvas');
+      const w = container.clientWidth || window.innerWidth;
+      const h = container.clientHeight || window.innerHeight;
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+      renderer.setSize(w, h);
+    }
+
+    function handlePostMessage(event) {
+      if (!event.data) return;
+      let data = event.data;
+      if (typeof data === 'string') {
+        try { data = JSON.parse(data); } catch (e) { return; }
+      }
+      if (data.action === 'DRIVE_COMMAND') {
+        if (data.direction) {
+          setDrive(data.direction, data.active);
+        }
+      } else if (data.action === 'JOYSTICK_MOVE') {
+        const dx = parseFloat(data.dx) || 0;
+        const dy = parseFloat(data.dy) || 0;
+        if (Math.hypot(dx, dy) > 0.05) {
+          joystickActive = true;
+          joystickDx = dx;
+          joystickDy = dy;
+        } else {
+          joystickActive = false;
+          joystickDx = 0;
+          joystickDy = 0;
+        }
+      } else if (data.action === 'JUMP') {
+        triggerJump();
+      } else if (data.action === 'COLLECT_SAMPLE') {
+        if (targetBeacon) {
+          targetBeacon.visible = false;
+        }
+        setTimeout(() => {
+          const nextX = (Math.random() - 0.5) * 120;
+          const nextZ = (Math.random() - 0.5) * 120;
+          targetSamplePosition.set(nextX, 0, nextZ);
+          if (targetBeacon) {
+            targetBeacon.position.copy(targetSamplePosition);
+            targetBeacon.visible = true;
+          }
+        }, 1200);
+      }
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,54 @@
+# ──────────────────────────────────────────────────────────────────────
+# NASA Space Exploration — GitHub Pages Deployment
+# ──────────────────────────────────────────────────────────────────────
+# Automatically builds the Flutter web app and deploys it to GitHub
+# Pages every time you push to the `main` branch.
+#
+# The base-href is auto-resolved from the repository name, so this
+# workflow works without edits regardless of your repo name.
+# ──────────────────────────────────────────────────────────────────────
+
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  # Allow manual trigger from the Actions tab
+  workflow_dispatch:
+
+permissions:
+  contents: write  # Required by peaceiris/actions-gh-pages to push to gh-pages
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Checkout ─────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Setup Flutter ────────────────────────────────────────────
+      - name: Setup Flutter (stable)
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      # ── 3. Install dependencies ─────────────────────────────────────
+      - name: Install dependencies
+        run: flutter pub get
+
+      # ── 4. Build web release ────────────────────────────────────────
+      # ${{ github.event.repository.name }} auto-resolves to your repo
+      # name so the base-href is always correct (e.g. /nasa_space/).
+      - name: Build Flutter Web (release)
+        run: flutter build web --release --base-href "/${{ github.event.repository.name }}/"
+
+      # ── 5. Deploy to gh-pages branch ────────────────────────────────
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./build/web
+          force_orphan: true   # Keep gh-pages branch clean (single commit)

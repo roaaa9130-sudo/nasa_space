@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <base href="$FLUTTER_BASE_HREF">
+
+  <meta charset="UTF-8">
+  <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+  <meta name="description" content="Official NASA Realistic 3D Mars & Moon Exploration Game (November 2026)">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+
+  <!-- iOS meta tags & icons -->
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="NASA 3D Exploration">
+  <link rel="apple-touch-icon" href="icons/Icon-192.png">
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" href="favicon.png"/>
+
+  <title>Official NASA Realistic 3D Mars & Moon Exploration Game (2026)</title>
+  <link rel="manifest" href="manifest.json">
+
+  <style>
+    * { box-sizing: border-box; }
+    html, body {
+      background-color: #030712;
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      width: 100%;
+      height: 100%;
+      touch-action: none;
+      overscroll-behavior: none;
+      -webkit-overflow-scrolling: none;
+      position: fixed;
+    }
+    #loading-indicator {
+      position: fixed;
+      top: 0; left: 0;
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      background: radial-gradient(circle at center, #0b1528 0%, #030712 100%);
+      color: #38bdf8;
+      z-index: 999999;
+      transition: opacity 0.4s ease;
+      user-select: none;
+      pointer-events: none;
+    }
+    .spinner-ring {
+      position: absolute;
+      width: 96px;
+      height: 96px;
+      border: 3px solid rgba(56, 189, 248, 0.15);
+      border-top: 3px solid #38bdf8;
+      border-radius: 50%;
+      animation: spin 1.4s linear infinite;
+      box-shadow: 0 0 16px rgba(56, 189, 248, 0.4);
+    }
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    .pulse-logo {
+      width: 76px; height: 76px;
+      border: 2px solid rgba(56,189,248,0.4);
+      border-radius: 50%;
+      display: flex; justify-content: center; align-items: center;
+      box-shadow: 0 0 25px rgba(56,189,248,0.35);
+      animation: pulseAnim 2s infinite ease-in-out;
+    }
+    @keyframes pulseAnim {
+      0%,100% { transform: scale(1); border-color: rgba(56,189,248,0.4); }
+      50%      { transform: scale(1.08); border-color: rgba(56,189,248,0.9); }
+    }
+    .load-text {
+      margin-top: 26px; font-size: 13px; font-weight: 700;
+      letter-spacing: 2.5px; text-transform: uppercase;
+      font-family: monospace, sans-serif; color: #38bdf8;
+    }
+    .sub-text {
+      margin-top: 10px; font-size: 11.5px; color: #94a3b8;
+      letter-spacing: 1px; font-family: monospace, sans-serif;
+      text-align: center; max-width: 90vw;
+      transition: color 0.3s ease;
+    }
+  </style>
+</head>
+<body>
+  <div id="loading-indicator">
+    <div style="position: relative; display: flex; justify-content: center; align-items: center;">
+      <div class="spinner-ring"></div>
+      <div class="pulse-logo">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none"
+             stroke="#38bdf8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"></circle>
+          <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"></path>
+          <path d="M2 12h20"></path>
+        </svg>
+      </div>
+    </div>
+    <div class="load-text">NASA SPACE EXPLORATION ENGINE // 2026</div>
+    <div class="sub-text" id="loading-subtext">جاري تهيئة المركبة الفضائية... / Initializing Telemetry...</div>
+  </div>
+
+  <script>
+    // ── Stale Service Worker Cleanup ──────────────────────────────────────────
+    // Unregister any cached service worker so the new build is served fresh.
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then(function(registrations) {
+        for (var r of registrations) {
+          r.unregister();
+          console.log('[NASA BOOT] Unregistered stale SW:', r.scope);
+        }
+      }).catch(function(e) {
+        console.warn('[NASA BOOT] SW cleanup warning:', e);
+      });
+    }
+
+    // ── Splash Dismiss Logic ──────────────────────────────────────────────────
+    var isDismissed = false;
+    var subTextEl   = document.getElementById('loading-subtext');
+
+    function dismissSplash(reason) {
+      if (isDismissed) return;
+      isDismissed = true;
+      console.log('[NASA BOOT] Splash dismissed:', reason);
+      var loader = document.getElementById('loading-indicator');
+      if (loader) {
+        loader.style.opacity = '0';
+        setTimeout(function() {
+          if (loader.parentNode) loader.parentNode.removeChild(loader);
+        }, 420);
+      }
+    }
+    // Expose so Dart's WebPlatformImpl can call it
+    window.dismissNasaSplash = dismissSplash;
+
+    // ── flutter-first-frame hook ──────────────────────────────────────────────
+    window.addEventListener('flutter-first-frame', function() {
+      dismissSplash('flutter-first-frame');
+    });
+
+    // ── Absolute Safety Fallback: 2.5 s max wait ─────────────────────────────
+    // If Flutter fails to fire flutter-first-frame AND Dart's postFrameCallback
+    // doesn't invoke dismissNasaSplash, the loading screen is force-dismissed.
+    setTimeout(function() {
+      dismissSplash('Safety timeout 2.5s');
+    }, 2500);
+
+    // ── Status text cycle ─────────────────────────────────────────────────────
+    setTimeout(function() {
+      if (subTextEl && !isDismissed)
+        subTextEl.innerText = 'جاري تحميل أجهزة الملاحة والأنظمة المدارية... / Loading Orbital Avionics & Nav...';
+    }, 700);
+    setTimeout(function() {
+      if (subTextEl && !isDismissed)
+        subTextEl.innerText = 'جاري تهيئة تضاريس الكواكب والمشاهد ثلاثية الأبعاد... / Initializing 3D Surface & Planetary Models...';
+    }, 1500);
+
+    // ── Global error traps ────────────────────────────────────────────────────
+    window.addEventListener('error', function(e) {
+      console.error('[NASA ERROR]', e.message, e.filename, e.lineno);
+    });
+    window.addEventListener('unhandledrejection', function(e) {
+      console.warn('[NASA UNHANDLED REJECTION]', e.reason);
+    });
+  </script>
+
+  <script src="flutter_bootstrap.js" async></script>
+</body>
+</html>

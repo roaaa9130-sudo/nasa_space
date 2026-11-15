@@ -1,0 +1,847 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>NASA 3D Planetary Orbit & Telemetry Simulation</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    body, html {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background-color: #020617;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      color: #e2e8f0;
+    }
+    #canvas-container {
+      width: 100%;
+      height: 100%;
+      position: absolute;
+      top: 0;
+      left: 0;
+      z-index: 1;
+      cursor: grab;
+    }
+    #canvas-container:active {
+      cursor: grabbing;
+    }
+
+    /* Embedded mode: hide overlapping HTML headers when inside Flutter */
+    body.is-embedded .hud-top,
+    body.is-embedded .hud-bottom,
+    body.is-embedded .hud-crosshair,
+    body.is-embedded #floating-pin-card {
+      display: none !important;
+    }
+
+    /* HUD Overlays (Standalone mode) */
+    .hud-layer {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 10;
+      pointer-events: none;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 16px;
+    }
+    .hud-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      pointer-events: auto;
+    }
+    .hud-bottom {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      pointer-events: auto;
+    }
+    .hud-card {
+      background: rgba(8, 15, 30, 0.8);
+      border: 1px solid rgba(0, 229, 255, 0.4);
+      box-shadow: 0 0 15px rgba(0, 229, 255, 0.15);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-family: monospace;
+      color: #38bdf8;
+      font-size: 11px;
+      letter-spacing: 0.5px;
+      pointer-events: auto;
+    }
+    .hud-badge {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #10b981;
+      margin-right: 6px;
+      box-shadow: 0 0 8px #10b981;
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.85); }
+    }
+    .hud-controls {
+      display: flex;
+      gap: 8px;
+      pointer-events: auto;
+    }
+    .hud-btn {
+      background: rgba(15, 23, 42, 0.85);
+      border: 1px solid rgba(56, 189, 248, 0.4);
+      color: #e0f2fe;
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 11px;
+      cursor: pointer;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      transition: all 0.2s ease;
+    }
+    .hud-btn:hover {
+      background: rgba(14, 165, 233, 0.25);
+      border-color: #38bdf8;
+      box-shadow: 0 0 10px rgba(56, 189, 248, 0.4);
+    }
+    .hud-btn.active {
+      background: #0284c7;
+      border-color: #38bdf8;
+      color: #ffffff;
+    }
+
+    /* Sleek Floating Info Card on Pin Click */
+    #floating-pin-card {
+      position: absolute;
+      bottom: 24px;
+      left: 24px;
+      width: 320px;
+      background: rgba(8, 15, 30, 0.92);
+      border: 1.5px solid #38bdf8;
+      border-radius: 12px;
+      box-shadow: 0 0 25px rgba(56, 189, 248, 0.35);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      padding: 14px 16px;
+      z-index: 50;
+      display: none;
+      pointer-events: auto;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      animation: slideUp 0.25s ease-out;
+    }
+    @keyframes slideUp {
+      from { transform: translateY(12px); opacity: 0; }
+      to { transform: translateY(0); opacity: 1; }
+    }
+    #pin-card-close {
+      position: absolute;
+      top: 10px;
+      right: 12px;
+      color: #94a3b8;
+      cursor: pointer;
+      font-size: 16px;
+      font-weight: bold;
+      line-height: 1;
+    }
+    #pin-card-close:hover {
+      color: #fff;
+    }
+    .btn-land-here {
+      display: block;
+      width: 100%;
+      margin-top: 12px;
+      padding: 10px;
+      background: #38bdf8;
+      color: #030712;
+      border: none;
+      border-radius: 8px;
+      font-weight: 800;
+      font-size: 11px;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .btn-land-here:hover {
+      background: #7dd3fc;
+      box-shadow: 0 0 14px rgba(56, 189, 248, 0.6);
+    }
+
+    #loading-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: radial-gradient(circle at center, #0b1528 0%, #030712 100%);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      z-index: 100;
+      transition: opacity 0.5s ease;
+    }
+    .spinner {
+      width: 50px;
+      height: 50px;
+      border: 3px solid rgba(56, 189, 248, 0.2);
+      border-top-color: #38bdf8;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+  </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+</head>
+<body>
+  <div id="loading-overlay">
+    <div class="spinner"></div>
+    <div style="margin-top: 18px; color: #38bdf8; font-family: monospace; font-size: 13px; letter-spacing: 2px;">
+      INITIALIZING NASA WEBGL 3D ORBIT ENGINE...
+    </div>
+  </div>
+
+  <div id="canvas-container"></div>
+
+  <!-- Sleek Floating Info Card when 3D Pin is Clicked -->
+  <div id="floating-pin-card">
+    <span id="pin-card-close" onclick="closePinCard()">✕</span>
+    <div style="display: flex; align-items: center; gap: 8px;">
+      <span class="hud-badge" id="card-badge"></span>
+      <span id="card-title" style="font-weight: 800; font-size: 14px; color: #38bdf8; letter-spacing: 0.5px;">JEZERO CRATER</span>
+    </div>
+    <div style="display: flex; justify-content: space-between; margin-top: 8px; font-size: 11px; color: #94a3b8; font-family: monospace;">
+      <span>COORDS:</span>
+      <span id="card-coords" style="color: #fff;">18.38°N 77.58°E</span>
+    </div>
+    <div style="display: flex; justify-content: space-between; margin-top: 4px; font-size: 11px; color: #94a3b8; font-family: monospace;">
+      <span>ELEVATION:</span>
+      <span id="card-elevation" style="color: #38bdf8;">-2.5 KM</span>
+    </div>
+    <div style="display: flex; justify-content: space-between; margin-top: 4px; font-size: 11px; color: #94a3b8; font-family: monospace;">
+      <span>HAZARD INDEX:</span>
+      <span id="card-hazard" style="color: #10b981; font-weight: bold;">38% (MODERATE)</span>
+    </div>
+    <button class="btn-land-here" id="btn-land-here" onclick="triggerDescent()">TRAVEL / LAND HERE</button>
+  </div>
+
+  <!-- Standalone HUD Layer -->
+  <div class="hud-layer">
+    <div class="hud-top">
+      <div class="hud-card">
+        <div><span class="hud-badge"></span><span id="planet-name-label">MARS ORBITAL OBSERVATION</span></div>
+        <div style="color: #94a3b8; margin-top: 4px;" id="telemetry-coordinates">COORDS: 18.38°N 77.58°E (JEZERO)</div>
+        <div style="color: #94a3b8;" id="telemetry-altitude">ALT: 384.2 KM | INCL: 25.19°</div>
+      </div>
+      <div class="hud-controls">
+        <button class="hud-btn active" id="btn-planet-toggle" onclick="togglePlanet()">SWITCH TO MOON</button>
+        <button class="hud-btn" id="btn-grid-toggle" onclick="toggleGrid()">GRID: ON</button>
+        <button class="hud-btn" id="btn-rotate-toggle" onclick="toggleRotate()">ORBIT: OFF</button>
+        <button class="hud-btn" id="btn-audio-toggle" onclick="toggleAudio()">AUDIO: OFF</button>
+      </div>
+    </div>
+
+    <div class="hud-bottom">
+      <div class="hud-card" style="font-size: 10px;">
+        <span style="color: #fbbf24;">MISSION: ARTEMIS & PERSEVERANCE 2026</span><br>
+        <span style="color: #64748b;">FPS: <span id="fps-counter" style="color: #38bdf8;">60</span> | CLICK PINS TO INSPECT</span>
+      </div>
+      <div class="hud-card" style="text-align: right; font-size: 10px;">
+        <span style="color: #38bdf8;">DRAG TO ROTATE | PINCH / SCROLL TO ZOOM</span><br>
+        <span style="color: #64748b;">NASA JET PROPULSION LABORATORY</span>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let scene, camera, renderer, controls;
+    let currentPlanetType = 'mars'; // 'mars' or 'moon'
+    let planetMesh, atmosphereMesh, gridMesh, starField, markerGroup, ringsGroup;
+    let pinColliders = [];
+    let autoRotate = false; // By default NO auto-rotation interference!
+    let gridVisible = true;
+    let audioContext = null;
+    let audioOscillator = null;
+    let audioGain = null;
+    let isAudioPlaying = false;
+    let lastTime = performance.now();
+    let frameCount = 0;
+    let activeSelectedSite = null;
+
+    // Smooth camera animation target
+    let targetCameraPosition = null;
+
+    window.addEventListener('DOMContentLoaded', () => {
+      // Check if embedded in iframe
+      if (window.parent && window.parent !== window) {
+        document.body.classList.add('is-embedded');
+      }
+
+      const urlParams = new URLSearchParams(window.location.search);
+      if (urlParams.get('planet') === 'moon') {
+        currentPlanetType = 'moon';
+      }
+
+      initScene();
+      setupPinRaycaster();
+      animate();
+
+      const loader = document.getElementById('loading-overlay');
+      if (loader) {
+        setTimeout(() => {
+          loader.style.opacity = '0';
+          setTimeout(() => loader.remove(), 400);
+        }, 300);
+      }
+    });
+
+    function createProceduralPlanetTexture(type) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 2048;
+      canvas.height = 1024;
+      const ctx = canvas.getContext('2d');
+
+      if (type === 'mars') {
+        const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+        grad.addColorStop(0, '#f1f5f9');
+        grad.addColorStop(0.08, '#c2410c');
+        grad.addColorStop(0.2, '#9a3412');
+        grad.addColorStop(0.4, '#ea580c');
+        grad.addColorStop(0.6, '#7c2d12');
+        grad.addColorStop(0.85, '#9a3412');
+        grad.addColorStop(0.94, '#c2410c');
+        grad.addColorStop(1, '#f8fafc');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        for (let i = 0; i < 400; i++) {
+          const x = Math.random() * canvas.width;
+          const y = Math.random() * canvas.height;
+          const r = Math.random() * 80 + 10;
+          ctx.beginPath();
+          ctx.arc(x, y, r, 0, Math.PI * 2);
+          ctx.fillStyle = Math.random() > 0.5 ? 'rgba(67, 20, 7, 0.45)' : 'rgba(234, 88, 12, 0.35)';
+          ctx.fill();
+
+          if (Math.random() > 0.4) {
+            ctx.beginPath();
+            ctx.arc(x, y, r * 0.3, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(30, 10, 5, 0.6)';
+            ctx.fill();
+            ctx.strokeStyle = 'rgba(254, 215, 170, 0.5)';
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+          }
+        }
+      } else {
+        const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+        grad.addColorStop(0, '#94a3b8');
+        grad.addColorStop(0.5, '#475569');
+        grad.addColorStop(1, '#94a3b8');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        ctx.fillStyle = 'rgba(30, 41, 59, 0.65)';
+        for (let i = 0; i < 45; i++) {
+          const x = Math.random() * canvas.width;
+          const y = Math.random() * canvas.height;
+          ctx.beginPath();
+          ctx.ellipse(x, y, Math.random() * 160 + 60, Math.random() * 120 + 40, Math.random() * Math.PI, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        for (let i = 0; i < 700; i++) {
+          const x = Math.random() * canvas.width;
+          const y = Math.random() * canvas.height;
+          const r = Math.random() * 45 + 5;
+          ctx.beginPath();
+          ctx.arc(x, y, r, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(15, 23, 42, 0.7)';
+          ctx.fill();
+          ctx.strokeStyle = 'rgba(241, 245, 249, 0.7)';
+          ctx.lineWidth = 1.2;
+          ctx.stroke();
+        }
+      }
+
+      return new THREE.CanvasTexture(canvas);
+    }
+
+    function createProceduralBumpMap() {
+      const canvas = document.createElement('canvas');
+      canvas.width = 1024;
+      canvas.height = 512;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#808080';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      for (let i = 0; i < 600; i++) {
+        const x = Math.random() * canvas.width;
+        const y = Math.random() * canvas.height;
+        const r = Math.random() * 30 + 5;
+        const grad = ctx.createRadialGradient(x, y, 0, x, y, r);
+        grad.addColorStop(0, '#ffffff');
+        grad.addColorStop(0.7, '#404040');
+        grad.addColorStop(1, '#808080');
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      return new THREE.CanvasTexture(canvas);
+    }
+
+    function initScene() {
+      const container = document.getElementById('canvas-container');
+      const width = container.clientWidth || window.innerWidth;
+      const height = container.clientHeight || window.innerHeight;
+
+      scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x020617);
+      scene.fog = new THREE.FogExp2(0x020617, 0.0008);
+
+      camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 2000);
+      camera.position.set(0, 15, 55);
+
+      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.setSize(width, height);
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1.2;
+      container.appendChild(renderer.domElement);
+
+      controls = new THREE.OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.08;
+      controls.minDistance = 22;
+      controls.maxDistance = 150;
+      controls.autoRotate = false; // Freedom to drag without spinning!
+      controls.rotateSpeed = 0.8;
+      controls.zoomSpeed = 1.0;
+
+      const sunLight = new THREE.DirectionalLight(0xfffbeb, 2.2);
+      sunLight.position.set(80, 40, 70);
+      scene.add(sunLight);
+
+      const spaceFill = new THREE.DirectionalLight(0x1e293b, 0.6);
+      spaceFill.position.set(-60, -30, -50);
+      scene.add(spaceFill);
+
+      scene.add(new THREE.AmbientLight(0x0f172a, 0.65));
+
+      createStarField();
+      createPlanet(currentPlanetType);
+
+      window.addEventListener('resize', onWindowResize, false);
+      window.addEventListener('message', handlePostMessage, false);
+
+      updateHudLabels();
+    }
+
+    function createStarField() {
+      const starsGeometry = new THREE.BufferGeometry();
+      const count = 4500;
+      const positions = new Float32Array(count * 3);
+      const colors = new Float32Array(count * 3);
+
+      for (let i = 0; i < count; i++) {
+        const theta = Math.random() * Math.PI * 2;
+        const phi = Math.acos(Math.random() * 2 - 1);
+        const dist = 700 + Math.random() * 400;
+
+        positions[i * 3] = dist * Math.sin(phi) * Math.cos(theta);
+        positions[i * 3 + 1] = dist * Math.sin(phi) * Math.sin(theta);
+        positions[i * 3 + 2] = dist * Math.cos(phi);
+
+        const colType = Math.random();
+        if (colType > 0.8) {
+          colors[i * 3] = 0.6; colors[i * 3 + 1] = 0.8; colors[i * 3 + 2] = 1.0;
+        } else if (colType > 0.6) {
+          colors[i * 3] = 1.0; colors[i * 3 + 1] = 0.85; colors[i * 3 + 2] = 0.6;
+        } else {
+          colors[i * 3] = 1.0; colors[i * 3 + 1] = 1.0; colors[i * 3 + 2] = 1.0;
+        }
+      }
+
+      starsGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      starsGeometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+      const starsMaterial = new THREE.PointsMaterial({
+        size: 1.8,
+        vertexColors: true,
+        transparent: true,
+        opacity: 0.9,
+      });
+
+      starField = new THREE.Points(starsGeometry, starsMaterial);
+      scene.add(starField);
+    }
+
+    function createPlanet(type) {
+      if (planetMesh) scene.remove(planetMesh);
+      if (atmosphereMesh) scene.remove(atmosphereMesh);
+      if (gridMesh) scene.remove(gridMesh);
+      if (markerGroup) scene.remove(markerGroup);
+      if (ringsGroup) scene.remove(ringsGroup);
+      pinColliders = [];
+
+      const radius = 18;
+      const sphereGeo = new THREE.SphereGeometry(radius, 64, 64);
+      const texture = createProceduralPlanetTexture(type);
+      const bumpMap = createProceduralBumpMap();
+
+      const planetMat = new THREE.MeshStandardMaterial({
+        map: texture,
+        bumpMap: bumpMap,
+        bumpScale: type === 'mars' ? 0.35 : 0.6,
+        roughness: 0.85,
+        metalness: 0.15,
+      });
+
+      planetMesh = new THREE.Mesh(sphereGeo, planetMat);
+      scene.add(planetMesh);
+
+      // Coordinate Grid
+      const gridGeo = new THREE.SphereGeometry(radius * 1.015, 36, 18);
+      const gridMat = new THREE.MeshBasicMaterial({
+        color: type === 'mars' ? 0xf97316 : 0x38bdf8,
+        wireframe: true,
+        transparent: true,
+        opacity: 0.22,
+      });
+      gridMesh = new THREE.Mesh(gridGeo, gridMat);
+      gridMesh.visible = gridVisible;
+      planetMesh.add(gridMesh);
+
+      // Atmosphere
+      const atmosGeo = new THREE.SphereGeometry(radius * 1.06, 48, 48);
+      const atmosMat = new THREE.ShaderMaterial({
+        vertexShader: `
+          varying vec3 vNormal;
+          void main() {
+            vNormal = normalize(normalMatrix * normal);
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          }
+        `,
+        fragmentShader: `
+          varying vec3 vNormal;
+          uniform vec3 color;
+          void main() {
+            float intensity = pow(0.65 - dot(vNormal, vec3(0, 0, 1.0)), 2.2);
+            gl_FragColor = vec4(color, intensity * 0.7);
+          }
+        `,
+        uniforms: {
+          color: { value: type === 'mars' ? new THREE.Color(0xf97316) : new THREE.Color(0x38bdf8) }
+        },
+        blending: THREE.AdditiveBlending,
+        side: THREE.BackSide,
+        transparent: true
+      });
+      atmosphereMesh = new THREE.Mesh(atmosGeo, atmosMat);
+      scene.add(atmosphereMesh);
+
+      // 3D Interactive Map Pins directly on surface
+      markerGroup = new THREE.Group();
+      ringsGroup = new THREE.Group();
+
+      const sites = type === 'mars' ? [
+        { id: 'jezero', name: "Jezero Crater", nameAr: "فوهة جيزيرو", lat: 18.38, lng: 77.58, elevation: "-2.5 km", hazard: "38% (MODERATE)", color: 0x10b981 },
+        { id: 'olympus', name: "Olympus Mons", nameAr: "بركان أوليمبوس", lat: 18.65, lng: 226.2, elevation: "+21.9 km", hazard: "72% (HIGH)", color: 0x38bdf8 },
+        { id: 'valles_marineris', name: "Valles Marineris", nameAr: "وادي مارينر", lat: -13.9, lng: 300.8, elevation: "-7.0 km", hazard: "65% (HIGH)", color: 0xf59e0b },
+        { id: 'gale', name: "Gale Crater", nameAr: "فوهة غيل", lat: -4.58, lng: 137.44, elevation: "-4.5 km", hazard: "28% (LOW)", color: 0xec4899 }
+      ] : [
+        { id: 'shackleton', name: "Shackleton Crater", nameAr: "فوهة شاكلتون", lat: -89.9, lng: 0.0, elevation: "-4.2 km", hazard: "58% (MODERATE)", color: 0x06b6d4 },
+        { id: 'tranquillity', name: "Mare Tranquillitatis", nameAr: "بحر الهدوء", lat: 0.67, lng: 23.47, elevation: "-1.2 km", hazard: "15% (LOW)", color: 0x10b981 },
+        { id: 'copernicus', name: "Copernicus Crater", nameAr: "فوهة كوبرنيكوس", lat: 9.62, lng: 339.92, elevation: "-3.8 km", hazard: "44% (MODERATE)", color: 0x38bdf8 },
+        { id: 'oceanus', name: "Oceanus Procellarum", nameAr: "محيط العواصف", lat: 18.4, lng: 292.6, elevation: "-1.8 km", hazard: "22% (LOW)", color: 0xf59e0b }
+      ];
+
+      sites.forEach(site => {
+        const markerPos = latLngToVector3(site.lat, site.lng, radius * 1.025);
+
+        // Visible Glowing Pinhead
+        const pinGeo = new THREE.SphereGeometry(0.55, 18, 18);
+        const pinMat = new THREE.MeshStandardMaterial({
+          color: site.color,
+          emissive: site.color,
+          emissiveIntensity: 0.6,
+          metalness: 0.4,
+          roughness: 0.2
+        });
+        const pin = new THREE.Mesh(pinGeo, pinMat);
+        pin.position.copy(markerPos);
+        markerGroup.add(pin);
+
+        // Vertical Laser Marker Beam
+        const lineGeo = new THREE.BufferGeometry().setFromPoints([
+          latLngToVector3(site.lat, site.lng, radius),
+          latLngToVector3(site.lat, site.lng, radius * 1.15)
+        ]);
+        const lineMat = new THREE.LineBasicMaterial({ color: site.color, transparent: true, opacity: 0.9, linewidth: 2 });
+        const line = new THREE.Line(lineGeo, lineMat);
+        markerGroup.add(line);
+
+        // Concentric Elevation Contour Rings
+        const ringGeo = new THREE.RingGeometry(0.8, 1.05, 32);
+        const ringMat = new THREE.MeshBasicMaterial({ color: site.color, side: THREE.DoubleSide, transparent: true, opacity: 0.85 });
+        const ring = new THREE.Mesh(ringGeo, ringMat);
+        ring.position.copy(markerPos);
+        ring.lookAt(new THREE.Vector3(0, 0, 0));
+        ringsGroup.add(ring);
+
+        // Invisible Large Sphere Collider for reliable mouse/touch clicks
+        const hitGeo = new THREE.SphereGeometry(2.2, 12, 12);
+        const hitMat = new THREE.MeshBasicMaterial({ visible: false });
+        const hitMesh = new THREE.Mesh(hitGeo, hitMat);
+        hitMesh.position.copy(markerPos);
+        hitMesh.userData = site;
+        planetMesh.add(hitMesh);
+        pinColliders.push(hitMesh);
+      });
+
+      planetMesh.add(markerGroup);
+      planetMesh.add(ringsGroup);
+    }
+
+    function latLngToVector3(lat, lng, radius) {
+      const phi = (90 - lat) * (Math.PI / 180);
+      const theta = (lng + 180) * (Math.PI / 180);
+      const x = -(radius * Math.sin(phi) * Math.cos(theta));
+      const z = radius * Math.sin(phi) * Math.sin(theta);
+      const y = radius * Math.cos(phi);
+      return new THREE.Vector3(x, y, z);
+    }
+
+    // 3D Pin Raycaster setup
+    function setupPinRaycaster() {
+      const raycaster = new THREE.Raycaster();
+      const mouse = new THREE.Vector2();
+      let startX = 0, startY = 0;
+
+      window.addEventListener('pointerdown', (e) => {
+        startX = e.clientX;
+        startY = e.clientY;
+      });
+
+      window.addEventListener('pointerup', (e) => {
+        // If dragged more than 7px, user was orbiting/zooming, not clicking
+        if (Math.hypot(e.clientX - startX, e.clientY - startY) > 7) return;
+
+        mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+        mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+        raycaster.setFromCamera(mouse, camera);
+
+        const hits = raycaster.intersectObjects(pinColliders, true);
+        if (hits.length > 0) {
+          const site = hits[0].object.userData;
+          onPinSelected(site);
+        }
+      });
+    }
+
+    function onPinSelected(site) {
+      activeSelectedSite = site;
+
+      // Animate Camera to frame pin smoothly
+      const targetVec = latLngToVector3(site.lat, site.lng, 36);
+      targetCameraPosition = targetVec;
+
+      // Show floating card in Three.js (for standalone)
+      const card = document.getElementById('floating-pin-card');
+      if (card) {
+        document.getElementById('card-title').innerText = site.name.toUpperCase();
+        document.getElementById('card-title').style.color = '#' + site.color.toString(16).padStart(6, '0');
+        document.getElementById('card-coords').innerText = `${site.lat.toFixed(2)}° ${site.lng.toFixed(2)}°`;
+        document.getElementById('card-elevation').innerText = site.elevation;
+        document.getElementById('card-hazard').innerText = site.hazard;
+        card.style.display = 'block';
+      }
+
+      // Notify parent Flutter application
+      notifyFlutter({
+        type: 'PIN_CLICKED',
+        siteId: site.id,
+        name: site.name,
+        lat: site.lat,
+        lng: site.lng,
+        elevation: site.elevation,
+        hazard: site.hazard
+      });
+    }
+
+    function closePinCard() {
+      const card = document.getElementById('floating-pin-card');
+      if (card) card.style.display = 'none';
+      notifyFlutter({ type: 'PIN_CARD_CLOSED' });
+    }
+
+    function triggerDescent() {
+      if (activeSelectedSite) {
+        notifyFlutter({
+          type: 'TRAVEL_TO_SITE',
+          siteId: activeSelectedSite.id
+        });
+      }
+    }
+
+    function animate() {
+      requestAnimationFrame(animate);
+
+      // Smooth camera interpolation when zooming into selected pin
+      if (targetCameraPosition) {
+        camera.position.lerp(targetCameraPosition, 0.05);
+        if (camera.position.distanceTo(targetCameraPosition) < 0.5) {
+          targetCameraPosition = null;
+        }
+      }
+
+      // Only rotate if user explicitly turned orbit on
+      if (planetMesh && autoRotate) {
+        planetMesh.rotation.y += 0.0018;
+      }
+
+      if (starField) {
+        starField.rotation.y += 0.0001;
+      }
+
+      if (ringsGroup) {
+        const pulse = 1.0 + Math.sin(performance.now() * 0.005) * 0.18;
+        ringsGroup.children.forEach(ring => {
+          ring.scale.set(pulse, pulse, 1);
+        });
+      }
+
+      controls.update();
+      renderer.render(scene, camera);
+
+      if (!window.__sceneReadyNotified) {
+        window.__sceneReadyNotified = true;
+        notifyFlutter({ type: 'SCENE_READY' });
+      }
+
+      frameCount++;
+      const now = performance.now();
+      if (now - lastTime >= 1000) {
+        document.getElementById('fps-counter').innerText = Math.round((frameCount * 1000) / (now - lastTime));
+        frameCount = 0;
+        lastTime = now;
+      }
+    }
+
+    function onWindowResize() {
+      const container = document.getElementById('canvas-container');
+      const w = container.clientWidth || window.innerWidth;
+      const h = container.clientHeight || window.innerHeight;
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+      renderer.setSize(w, h);
+    }
+
+    function togglePlanet() {
+      currentPlanetType = currentPlanetType === 'mars' ? 'moon' : 'mars';
+      createPlanet(currentPlanetType);
+      updateHudLabels();
+      notifyFlutter({ type: 'PLANET_CHANGED', planet: currentPlanetType });
+    }
+
+    function toggleGrid() {
+      gridVisible = !gridVisible;
+      if (gridMesh) gridMesh.visible = gridVisible;
+      document.getElementById('btn-grid-toggle').innerText = `GRID: ${gridVisible ? 'ON' : 'OFF'}`;
+      notifyFlutter({ type: 'GRID_TOGGLED', visible: gridVisible });
+    }
+
+    function toggleRotate() {
+      autoRotate = !autoRotate;
+      document.getElementById('btn-rotate-toggle').innerText = `ORBIT: ${autoRotate ? 'ON' : 'OFF'}`;
+      notifyFlutter({ type: 'ROTATE_TOGGLED', autoRotate: autoRotate });
+    }
+
+    function toggleAudio() {
+      if (!isAudioPlaying) {
+        try {
+          audioContext = new (window.AudioContext || window.webkitAudioContext)();
+          audioOscillator = audioContext.createOscillator();
+          audioGain = audioContext.createGain();
+          audioOscillator.type = 'sine';
+          audioOscillator.frequency.setValueAtTime(55, audioContext.currentTime);
+          audioGain.gain.setValueAtTime(0.08, audioContext.currentTime);
+          audioOscillator.connect(audioGain);
+          audioGain.connect(audioContext.destination);
+          audioOscillator.start();
+          isAudioPlaying = true;
+          document.getElementById('btn-audio-toggle').innerText = 'AUDIO: ON';
+          document.getElementById('btn-audio-toggle').classList.add('active');
+        } catch (e) {}
+      } else {
+        if (audioOscillator) {
+          audioOscillator.stop();
+          audioOscillator.disconnect();
+        }
+        isAudioPlaying = false;
+        document.getElementById('btn-audio-toggle').innerText = 'AUDIO: OFF';
+        document.getElementById('btn-audio-toggle').classList.remove('active');
+      }
+    }
+
+    function updateHudLabels() {
+      const isMars = currentPlanetType === 'mars';
+      document.getElementById('planet-name-label').innerText = isMars ? 'MARS ORBITAL OBSERVATION' : 'LUNAR RECONNAISSANCE ORBITER';
+      document.getElementById('btn-planet-toggle').innerText = isMars ? 'SWITCH TO MOON' : 'SWITCH TO MARS';
+      document.getElementById('telemetry-coordinates').innerText = isMars 
+        ? 'COORDS: 18.38°N 77.58°E (JEZERO CRATER)' 
+        : 'COORDS: 89.90°S 0.00°E (SHACKLETON BASIN)';
+      document.getElementById('telemetry-altitude').innerText = isMars
+        ? 'ALT: 384.2 KM | INCL: 25.19° | ATM: 0.636 kPa'
+        : 'ALT: 112.5 KM | INCL: 90.00° | ATM: 0.000 kPa';
+    }
+
+    function handlePostMessage(event) {
+      if (!event.data) return;
+      let data = event.data;
+      if (typeof data === 'string') {
+        try { data = JSON.parse(data); } catch (e) { return; }
+      }
+
+      if (data.action === 'SET_PLANET') {
+        if (data.planet && data.planet !== currentPlanetType) {
+          currentPlanetType = data.planet;
+          createPlanet(currentPlanetType);
+          updateHudLabels();
+        }
+      } else if (data.action === 'SET_TARGET_COORDINATES') {
+        if (data.lat !== undefined && data.lng !== undefined) {
+          targetCameraPosition = latLngToVector3(data.lat, data.lng, 36);
+        }
+      } else if (data.action === 'TOGGLE_GRID') {
+        toggleGrid();
+      } else if (data.action === 'TOGGLE_AUTO_ROTATE') {
+        toggleRotate();
+      }
+    }
+
+    function notifyFlutter(msg) {
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage(JSON.stringify(msg), '*');
+      }
+    }
+  </script>
+</body>
+</html>
